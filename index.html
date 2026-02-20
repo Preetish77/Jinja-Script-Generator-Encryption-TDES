@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Jinja Script Generator</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<style>
+body{
+  font-family: Arial;
+  padding:20px;
+  background:#f4f6fb;
+  max-width:1100px;
+  margin:auto;
+}
+
+input, button{
+  padding:10px;
+  margin:6px 0;
+}
+
+textarea{
+  width:100%;
+  height:450px;
+  margin-top:15px;
+  font-family:monospace;
+}
+</style>
+</head>
+
+<body>
+
+<h2>Jinja Script Generator</h2>
+
+<label>Attribute Name</label><br>
+<input type="text" id="attribute" value="customer.stream_id">
+
+<br><br>
+
+<input type="file" id="fileInput">
+
+<br>
+
+<button onclick="processFile()">Generate Scripts</button>
+<button onclick="copyOutput()">Copy</button>
+<button onclick="downloadTxt()">Download</button>
+
+<textarea id="output"></textarea>
+
+<script>
+
+function formatStream(stream){
+    stream = Number(stream);
+
+    if(stream === 0) return "S0";
+    if(stream < 10) return "S0" + stream;
+    return "S" + stream;
+}
+
+function detectDelimiter(text){
+    if(text.includes(";")) return ";";
+    if(text.includes("\t")) return "\t";
+    return ",";
+}
+
+function processFile(){
+
+    const file = document.getElementById("fileInput").files[0];
+    if(!file) return;
+
+    const reader = new FileReader();
+    const fileName = file.name.toLowerCase();
+
+    if(fileName.endsWith(".csv")){
+
+        reader.onload = function(e){
+
+            let csv = e.target.result;
+
+            const delimiter = detectDelimiter(csv);
+
+            const workbook = XLSX.read(csv, {
+                type: "string",
+                raw: true,
+                FS: delimiter
+            });
+
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const json = XLSX.utils.sheet_to_json(sheet);
+
+            generateScripts(normalizeColumns(json));
+        };
+
+        reader.readAsText(file);
+
+    } else {
+
+        reader.onload = function(e){
+
+            const data = new Uint8Array(e.target.result);
+
+            const workbook = XLSX.read(data, {type:"array"});
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            const json = XLSX.utils.sheet_to_json(sheet);
+
+            generateScripts(normalizeColumns(json));
+        };
+
+        reader.readAsArrayBuffer(file);
+    }
+}
+
+function normalizeColumns(data){
+
+    return data.map(row => {
+        const newRow = {};
+
+        Object.keys(row).forEach(key => {
+            const cleanKey = key.trim().toUpperCase();
+            newRow[cleanKey] = row[key];
+        });
+
+        return newRow;
+    });
+}
+
+function generateScripts(data){
+
+    if(!data.length){
+        alert("File has no data");
+        return;
+    }
+
+    if(!("JN" in data[0]) || !("TYPE" in data[0]) || !("STREAM" in data[0])){
+        alert("CSV must contain: JN, TYPE, STREAM, SOURCE_CODE, SOURCE_CODE_tdes");
+        return;
+    }
+
+    const attribute = document.getElementById("attribute").value.trim();
+    let output = "";
+
+    const grouped = {};
+
+    data.forEach(row => {
+
+        const jn = String(row.JN || "").trim();
+        const type = String(row.TYPE || "").trim().toUpperCase();
+        const stream = Number(row.STREAM);
+        const source = String(row.SOURCE_CODE || "").trim();
+        const tdes = String(row.SOURCE_CODE_TDES || row.SOURCE_CODE_tdes || "").trim();
+
+        if(!jn || !type) return;
+
+        if(!grouped[jn]) grouped[jn] = {};
+        if(!grouped[jn][type]) grouped[jn][type] = [];
+
+        grouped[jn][type].push({
+            stream,
+            source,
+            tdes
+        });
+    });
+
+    for(const jn in grouped){
+
+        for(const type in grouped[jn]){
+
+            let rows = grouped[jn][type];
+
+            const streamMap = {};
+            rows.forEach(r => {
+                streamMap[r.stream] = r;
+            });
+
+            rows = Object.values(streamMap);
+            rows.sort((a,b)=> a.stream - b.stream);
+
+            output += `JN: ${jn}, Type: ${type}\n\n`;
+
+            output += "SOURCE_CODE Script:\n";
+            output += buildSource(rows, attribute);
+
+            output += "\n\nSOURCE_CODE_tdes Script:\n";
+            output += buildTdes(rows, attribute);
+
+            output += "\n\n------------------------------------\n\n";
+        }
+    }
+
+    document.getElementById("output").value = output.trim();
+}
+
+function buildSource(rows, attribute){
+
+    if(rows.length === 1){
+        return rows[0].source;
+    }
+
+    let script = "";
+
+    rows.forEach((row, index)=>{
+
+        const stream = formatStream(row.stream);
+
+        if(index === 0){
+            script += `{%- if ${attribute} == "${stream}" -%}\n  ${row.source}\n`;
+        }
+        else if(index === rows.length - 1){
+            script += `{%- else -%}\n  ${row.source}\n{%- endif -%}`;
+        }
+        else{
+            script += `{%- elif ${attribute} == "${stream}" -%}\n  ${row.source}\n`;
+        }
+
+    });
+
+    return script;
+}
+
+function buildTdes(rows, attribute){
+
+    if(rows.length === 1){
+        return `{% set encrypted_source = '${rows[0].tdes}' %}`;
+    }
+
+    let script = "";
+
+    rows.forEach((row, index)=>{
+
+        const stream = formatStream(row.stream);
+
+        if(index === 0){
+            script += `{% if ${attribute} == '${stream}' %}\n  {% set encrypted_source = '${row.tdes}' %}\n`;
+        }
+        else if(index === rows.length - 1){
+            script += `{% else %}\n  {% set encrypted_source = '${row.tdes}' %}\n{% endif %}`;
+        }
+        else{
+            script += `{% elif ${attribute} == '${stream}' %}\n  {% set encrypted_source = '${row.tdes}' %}\n`;
+        }
+
+    });
+
+    return script;
+}
+
+function copyOutput(){
+    const textarea = document.getElementById("output");
+    textarea.select();
+    document.execCommand("copy");
+}
+
+function downloadTxt(){
+    const text = document.getElementById("output").value;
+    const blob = new Blob([text], {type:"text/plain"});
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "jinja_scripts.txt";
+    link.click();
+}
+
+</script>
+
+</body>
+</html>
