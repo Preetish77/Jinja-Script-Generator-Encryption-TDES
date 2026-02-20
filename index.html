@@ -221,7 +221,7 @@ function buildSource(rows, attribute){
 function buildTdes(rows, attribute){
 
     if(rows.length === 1){
-        return `{% set encrypted_source = '${rows[0].tdes}' %}`;
+        return `{%- set encrypted_source = '${rows[0].tdes}' -%}`;
     }
 
     let script = "";
@@ -231,13 +231,13 @@ function buildTdes(rows, attribute){
         const stream = formatStream(row.stream);
 
         if(index === 0){
-            script += `{% if ${attribute} == '${stream}' %}\n  {% set encrypted_source = '${row.tdes}' %}\n`;
+            script += `{%- if ${attribute} == "${stream}" -%}\n  {%- set encrypted_source = '${row.tdes}' -%}\n`;
         }
         else if(index === rows.length - 1){
-            script += `{% else %}\n  {% set encrypted_source = '${row.tdes}' %}\n{% endif %}`;
+            script += `{%- else -%}\n  {%- set encrypted_source = '${row.tdes}' -%}\n{%- endif -%}`;
         }
         else{
-            script += `{% elif ${attribute} == '${stream}' %}\n  {% set encrypted_source = '${row.tdes}' %}\n`;
+            script += `{%- elif ${attribute} == "${stream}" -%}\n  {%- set encrypted_source = '${row.tdes}' -%}\n`;
         }
 
     });
